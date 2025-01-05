@@ -1,4 +1,3 @@
-version: '3.8'
 
 services:
   zookeeper:
@@ -6,28 +5,38 @@ services:
     hostname: zookeeper
     container_name: zookeeper
     ports:
-      - "2181:2181"
+    - "${ZOOKEEPER_PORT:-2181}:2181"
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
-      ZOOKEEPER_SESSION_TIMEOUT_MS: 15000
+      ZOOKEEPER_SESSION_TIMEOUT_MS: 20000
+    healthcheck: # Add healthcheck for Zookeeper
+      test: ["CMD-SHELL", "nc -z localhost 2181 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   kafka:
     image: confluentinc/cp-kafka:7.5.0 # Match Zookeeper version
     hostname: kafka
     container_name: kafka
     depends_on:
-      - zookeeper
+      zookeeper:
+        condition: service_healthy # Wait for Zookeeper healthcheck
+    volumes:
+      - kafka-data:/var/lib/kafka
     ports:
-      - "9092:9092" # Host port for external clients
-      - "9093:9093" # Listener port for inter-broker communication and internal clients
+    - "${KAFKA_PORT:-9092}:9092" # Host port for external clients
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_LISTENERS: PLAINTEXT://kafka:9092,BROKER://0.0.0.0:9093 # Define listeners
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,BROKER://kafka:9093 # Crucial for external access and inter-broker communication
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,BROKER:PLAINTEXT # Map listener names to protocols
-      KAFKA_INTER_BROKER_LISTENER_NAME: BROKER # Set inter-broker listener
+      KAFKA_LISTENERS: PLAINTEXT://kafka:29092,LOCALHOST://kafka:${KAFKA_PORT:-9092}
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,LOCALHOST://Rohits-MacBook-Air.local:${KAFKA_PORT:-9092}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT, LOCALHOST:PLAINTEXT # Map listener names to protocols
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT # Set inter-broker listener
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
@@ -35,13 +44,72 @@ services:
       KAFKA_DEFAULT_REPLICATION_FACTOR: 1 # Set default replication factor
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true" # Enable auto topic creation
 
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.5.0
+    platform: linux/amd64
+    container_name: schema-registry
+    depends_on:
+      - kafka
+    ports:
+    - "${SCHEMA_REGISTRY_PORT:-8081}:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:29092
+      SCHEMA_REGISTRY_KAFKASTORE_CONNECTION_URL: zookeeper:2181
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      SCHEMA_REGISTRY_ADVERTISED_LISTENERS: http://schema-registry:8081
+      SCHEMA_REGISTRY_DEBUG: "true"
+      SCHEMA_REGISTRY_ACCESS_CONTROL_ALLOW_METHODS: GET,POST,PUT,OPTIONS
+      SCHEMA_REGISTRY_ACCESS_CONTROL_ALLOW_ORIGIN: "*"
+
+  schema-registry-ui:
+    image: landoop/schema-registry-ui:latest
+    platform: linux/amd64
+    depends_on:
+      - schema-registry
+    container_name: schema-registry-ui
+    ports:
+      - "${SCHEMA_REGISTRY_UI_PORT:-8000}:8000"
+    environment:
+      SCHEMAREGISTRY_URL: http://localhost:${SCHEMA_REGISTRY_PORT:-8081}
+      ALLOW_GLOBAL: 1
+      ALLOW_TRANSITIVE: 1
+      ALLOW_DELETION: 1
+
+  kafdrop:
+    image: obsidiandynamics/kafdrop:latest
+    platform: linux/amd64
+    container_name: kafdrop
+    ports:
+    - "${KAFDROP_PORT:-9100}:9100"
+    environment:
+      KAFKA_BROKERCONNECT: kafka:29092
+      KAFKA_BROKER_CONNECT: kafka:29092
+      server.port: 9100
+      schema.registry.connect: http://schema-registry:8081
+      schemaregistry.connect: http://schema-registry:8081
+      JVM_OPTS: "-Xms32M -Xmx64M"
+    depends_on:
+      - kafka
+      - schema-registry
+
   kafka-ui: # Optional: Kafka UI for monitoring
     image: provectuslabs/kafka-ui:latest
     container_name: kafka-ui
+    platform: linux/amd64
     ports:
       - 8080:8080
     environment:
       KAFKA_CLUSTERS_0_NAME: local
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9093
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTER_0_SCHEMA_REGISTRY_URL: http://schema-registry:8081 # if schema registry in NOT visible on kafka-ui then manually add it on the UI by configuring the cluster.
+      KAFKA_CLUSTER_0_SCHEMA_REGISTRY_ENABLED: 'true'
+      KAFKA_CLUSTER_0_METRICS_PORT: 9997
+      DYNAMIC_CONFIG_ENABLED: 'true'
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
     depends_on:
       - kafka
+      - schema-registry
+volumes:
+  zookeeper-data: {}
+  kafka-data: {}
