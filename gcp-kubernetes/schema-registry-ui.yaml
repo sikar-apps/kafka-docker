@@ -1,0 +1,49 @@
+# schema-registry-ui.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: schema-registry-ui
+spec:
+  ports:
+    - port: 8000
+      targetPort: 8000
+      name: http
+  selector:
+    app: schema-registry-ui
+  type: LoadBalancer # Or Ingress
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: schema-registry-ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: schema-registry-ui
+  template:
+    metadata:
+      labels:
+        app: schema-registry-ui
+    spec:
+      containers:
+        - name: schema-registry-ui
+          image: landoop/schema-registry-ui:latest
+          ports:
+            - containerPort: 8000
+          env:
+            - name: SCHEMAREGISTRY_URL
+              value: http://schema-registry:8081
+            - name: ALLOW_GLOBAL
+              value: "1"
+            - name: ALLOW_TRANSITIVE
+              value: "1"
+            - name: ALLOW_DELETION
+              value: "1"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

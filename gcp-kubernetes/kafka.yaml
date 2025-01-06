@@ -1,0 +1,137 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka
+spec:
+  ports:
+    - port: 9092
+      name: external
+    - port: 29092
+      name: internal
+  selector:
+    app: kafka
+  type: LoadBalancer # Use Ingress for more advanced routing
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kafka
+spec:
+  serviceName: "kafka"
+  replicas: 3 # Recommended for production
+  selector:
+    matchLabels:
+      app: kafka
+  template:
+    metadata:
+      labels:
+        app: kafka
+    spec:
+      affinity: # Distribute pods across nodes for HA
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: "kubernetes.io/hostname"
+              labelSelector:
+                matchLabels:
+                  app: kafka
+      containers:
+        - name: kafka
+          image: confluentinc/cp-kafka:7.5.0
+          ports:
+            - containerPort: 9092
+              name: external
+            - containerPort: 29092
+              name: internal
+          env:
+            - name: KAFKA_BROKER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podName # Dynamically assign broker IDs
+            - name: KAFKA_ZOOKEEPER_CONNECT
+              value: zookeeper:2181
+            - name: KAFKA_LISTENERS
+              value: PLAINTEXT://:29092,EXTERNAL://:9092
+            - name: KAFKA_ADVERTISED_LISTENERS
+              value: PLAINTEXT://$(POD_NAME).kafka.default.svc.cluster.local:29092,EXTERNAL://$(EXTERNAL_IP)
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+              value: PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+            - name: KAFKA_INTER_BROKER_LISTENER_NAME
+              value: PLAINTEXT
+            - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+              value: "3" # Match number of brokers
+            - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
+              value: "3" # Match number of brokers
+            - name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR
+              value: "2"
+            - name: KAFKA_NUM_PARTITIONS
+              value: "1"
+            - name: KAFKA_DEFAULT_REPLICATION_FACTOR
+              value: "3" # Match number of brokers
+            - name: KAFKA_AUTO_CREATE_TOPICS_ENABLE
+              value: "true"
+          volumeMounts:
+            - name: kafka-data
+              mountPath: /var/lib/kafka
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          livenessProbe:
+            tcpSocket:
+              port: 29092
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          readinessProbe:
+            tcpSocket:
+              port: 29092
+            initialDelaySeconds: 15
+            periodSeconds: 10
+      initContainers:
+        - name: external-ip-setter
+          image: busybox:latest
+          command: ['sh', '-c', 'until nslookup kafka-external-ip; do sleep 5; done; EXTERNAL_IP=$(getent ahosts kafka-external-ip | awk \'{print $1}\'); envsubst < /tmp/kafka-config.yaml > /tmp/kafka-config-processed.yaml']
+          env:
+            - name: EXTERNAL_IP
+              valueFrom:
+                configMapKeyRef:
+                  name: kafka-external-ip-config
+                  key: external-ip
+          volumeMounts:
+            - name: kafka-config
+              mountPath: /tmp/kafka-config.yaml
+            - name: kafka-config-processed
+              mountPath: /tmp/kafka-config-processed.yaml
+      volumes:
+        - name: kafka-config
+          configMap:
+            name: kafka-config
+        - name: kafka-config-processed
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: kafka-data
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        resources:
+          requests:
+            storage: 5Gi
+        storageClassName: standard # Replace with your StorageClass
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-external-ip-config
+data:
+  external-ip: "<YOUR_EXTERNAL_IP>" # Replace with your LoadBalancer IP or Ingress hostname
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-config
+data:
+  kafka-config.yaml: |
+    KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://$(POD_NAME).kafka.default.svc.cluster.local:29092,EXTERNAL://${EXTERNAL_IP}:9092

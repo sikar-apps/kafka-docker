@@ -1,0 +1,53 @@
+# kafdrop.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafdrop
+spec:
+  ports:
+    - port: 9100
+      targetPort: 9100
+      name: http
+  selector:
+    app: kafdrop
+  type: LoadBalancer # Or Ingress
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafdrop
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafdrop
+  template:
+    metadata:
+      labels:
+        app: kafdrop
+    spec:
+      containers:
+        - name: kafdrop
+          image: obsidiandynamics/kafdrop:latest
+          ports:
+            - containerPort: 9100
+          env:
+            - name: KAFKA_BROKERCONNECT
+              value: kafka:29092
+            - name: KAFKA_BROKER_CONNECT # Duplicate, but kept for compatibility
+              value: kafka:29092
+            - name: server.port
+              value: "9100"
+            - name: schema.registry.connect
+              value: http://schema-registry:8081
+            - name: schemaregistry.connect # Duplicate, but kept for compatibility
+              value: http://schema-registry:8081
+            - name: JVM_OPTS
+              value: "-Xms32M -Xmx64M"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
