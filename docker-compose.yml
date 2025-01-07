@@ -110,6 +110,84 @@ services:
     depends_on:
       - kafka
       - schema-registry
+
+  # Generate a keyfile for MongoDB using -> openssl rand -base64 756 > keyfile && chmod 400 keyfile
+  # export KEYFILE_PATH=$(pwd)/keyfile  # Set the environment variable
+  # MongoDB service
+  mongodb:
+    image: mongo:6.0
+    container_name: mongodb
+    command: >
+      bash -c "
+        mkdir -p /data/mongodb &&
+        cat /keyfile > /data/mongodb/keyfile &&
+        chown mongodb:mongodb /data/mongodb/keyfile &&
+        chmod 400 /data/mongodb/keyfile &&
+        mongod --replSet rs0 --bind_ip_all --keyFile /data/mongodb/keyfile"
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: example
+    volumes:
+      - ${KEYFILE_PATH}:/keyfile:ro
+      - ./mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+      - mongodb_data:/data/db
+      - mongodb_config:/data/mongodb
+
+  # MongoDB replica set initializer
+  mongo-init:
+    image: mongo:6.0
+    restart: "no"
+    depends_on:
+      - mongodb
+    command: >
+      bash -c "
+        echo 'Waiting for MongoDB to start...' &&
+        sleep 10 &&
+        mongosh --host mongodb:27017 -u root -p example --eval '
+          rs.initiate({
+            _id: \"rs0\",
+            members: [{ _id: 0, host: \"mongodb:27017\" }]
+          })
+        '"
+  # Kafka Connect service
+  kafka-connect:
+    image: confluentinc/cp-kafka-connect:7.5.0
+    container_name: kafka-connect
+    depends_on:
+      - kafka
+      - mongodb
+    ports:
+      - "8083:8083"
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: kafka:29092
+      CONNECT_REST_PORT: 8083
+      CONNECT_GROUP_ID: "kafka-connect-group"
+      CONNECT_CONFIG_STORAGE_TOPIC: "kafka-connect-configs"
+      CONNECT_OFFSET_STORAGE_TOPIC: "kafka-connect-offsets"
+      CONNECT_STATUS_STORAGE_TOPIC: "kafka-connect-status"
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_INTERNAL_KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_INTERNAL_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_REST_ADVERTISED_HOST_NAME: "kafka-connect"
+      CONNECT_PLUGIN_PATH: "/usr/share/java,/usr/share/confluent-hub-components"
+    command:
+      - bash
+      - -c
+      - |
+        echo "Installing connector plugins"
+        confluent-hub install --no-prompt mongodb/kafka-connect-mongodb:1.8.0
+        #
+        echo "Launching Kafka Connect worker"
+        /etc/confluent/docker/run
+
 volumes:
   zookeeper-data: {}
   kafka-data: {}
+  mongodb_data:
+  mongodb_config: {}

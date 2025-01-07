@@ -1,0 +1,20 @@
+{
+  "name": "mongodb-source-connector",
+  "config": {
+    "connector.class": "com.mongodb.kafka.connect.MongoSourceConnector",
+    "connection.uri": "mongodb://root:example@mongodb:27017",
+    "database": "accountsDB",
+    "collection": "accounts",
+    "topic.prefix": "sikar",
+    "topic.suffix": "cdc",
+    "poll.max.batch.size": 1000,
+    "poll.await.time.ms": 5000,
+    "publish.full.document.only": false,
+    "change.stream.full.document": "updateLookup",
+    "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": false,
+    "output.format.value": "schema",
+    "output.format.key": "schema"
+  }
+}
